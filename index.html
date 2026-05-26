@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>THE THUNDER DRAGON'S ASCENT: RUNNER EDITION</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #0b0214;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            user-select: none;
+        }
+        #game-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .hud-container {
+            position: absolute;
+            top: 25px;
+            left: 25px;
+            display: flex;
+            gap: 15px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .hud-card {
+            color: #ffffff;
+            background: rgba(20, 8, 38, 0.85);
+            border: 2px solid #ffcc00;
+            padding: 14px 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 25px rgba(255, 204, 0, 0.2);
+            backdrop-filter: blur(10px);
+        }
+        .hud-card.penalty {
+            border-color: #ff3b00;
+            box-shadow: 0 0 25px rgba(255, 59, 0, 0.2);
+        }
+        .hud-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #a78bfa;
+            margin-bottom: 2px;
+            font-weight: 800;
+        }
+        .hud-value {
+            font-size: 1.6rem;
+            font-weight: 800;
+            color: #ffcc00;
+            text-shadow: 0 0 10px rgba(255, 204, 0, 0.4);
+        }
+        .hud-card.penalty .hud-value {
+            color: #ff3b00;
+            text-shadow: 0 0 10px rgba(255, 59, 0, 0.4);
+        }
+        .controls-manifest {
+            position: absolute;
+            bottom: 25px;
+            right: 25px;
+            background: rgba(15, 5, 28, 0.9);
+            border: 1px solid #a78bfa;
+            padding: 15px 20px;
+            border-radius: 6px;
+            color: #cbd5e1;
+            font-size: 0.85rem;
+            pointer-events: none;
+            line-height: 1.7;
+            box-shadow: 0 0 20px rgba(167, 139, 250, 0.15);
+            z-index: 10;
+        }
+        .btn-key {
+            background: #ffcc00;
+            color: #0b0214;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 0.75rem;
+            margin-right: 4px;
+            box-shadow: 0 2px 0 #b38f00;
+        }
+        #alert-toast {
+            position: absolute;
+            top: 120px;
+            left: 25px;
+            color: #ffcc00;
+            font-weight: 800;
+            font-size: 1.1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0;
+            transition: opacity 0.2s, transform 0.2s;
+            transform: translateY(-10px);
+            pointer-events: none;
+            z-index: 10;
+            background: rgba(11, 2, 20, 0.8);
+            padding: 6px 12px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="hud-container">
+        <div class="hud-card">
+            <div class="hud-label">Merit Score</div>
+            <div id="score-display" class="hud-value">0</div>
+        </div>
+        <div class="hud-card">
+            <div class="hud-label">Druk Length</div>
+            <div id="length-display" class="hud-value">7</div>
+        </div>
+        <div class="hud-card penalty">
+            <div class="hud-label">Flight Speed</div>
+            <div id="speedometer" class="hud-value">0.0 C/H</div>
+        </div>
+    </div>
+
+    <div id="alert-toast">SACRED HARVEST!</div>
+
+    <div class="controls-manifest">
+        <p style="color: #ffcc00; font-weight: bold; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; font-size: 0.9rem;">Druk's Highway</p>
+        <p><span class="btn-key">A</span> / <span class="btn-key">D</span> Snap Lane Left / Right</p>
+        <p style="margin-top: 5px; font-size: 0.75rem; color: #f87171;">⚠️ Avoid Chhorten obstacles or length will be docked!</p>
+    </div>
+
+    <canvas id="game-canvas"></canvas>
+
+    <script>
+        let scene, camera, renderer, dragonHead;
+        let segmentsArray = [], totalSegments = 7;
+        const initialSegments = 7;
+        let particlesSystem, sparksCount = 150, particlesData = [];
+        
+        // Endless Track Environment & Generation Variables
+        let obstacles = [];
+        let collectibles = [];
+        const laneXValues = [-8, 0, 8]; // Three tracking lanes (Left, Middle, Right)
+        let currentLane = 1; // Start in middle lane (Index 1)
+        let targetX = laneXValues[currentLane];
+        
+        let score = 0;
+        let cameraShake = 0;
+        let gameSpeed = 0.8; // The constant forward velocity
+        const spawnIntervalZ = 45; // Spawn a fresh set of barriers every 45 units
+        let lastSpawnZ = -50; 
+
+        // Positional Tracking Arrays for Snake Body Physics
+        let trackingX = [], trackingY = [], trackingZ = [];
+        const segmentDelayInterval = 5; 
+        let imperialGoldMat, linkGeo, chiliBodyGeo, chiliTipGeo, chiliMat, jewelGeo, jewelMat;
+
+        function init() {
+            const canvas = document.getElementById('game-canvas');
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f051d); 
+            scene.fog = new THREE.FogExp2(0x0f051d, 0.007); 
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 1200);
+
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+            const globalAmbient = new THREE.AmbientLight(0x5a207c, 1.0); 
+            scene.add(globalAmbient);
+
+            const majesticSun = new THREE.DirectionalLight(0xffcc00, 1.5); 
+            majesticSun.position.set(40, 100, -20);
+            scene.add(majesticSun);
+
+            const cloudSeaTexture = createCloudSeaTexture();
+            generateEndlessTrack(cloudSeaTexture);
+            
+            // Build reusable assets for performance optimization
+            chiliBodyGeo = new THREE.CylinderGeometry(0.3, 0.6, 1.8, 8);
+            chiliTipGeo = new THREE.ConeGeometry(0.6, 1.2, 8);
+            chiliMat = new THREE.MeshStandardMaterial({ color: 0xff0022, roughness: 0.2, emissive: 0x330000 });
+            jewelGeo = new THREE.OctahedronGeometry(1.1, 0);
+            jewelMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, metalness: 0.9, roughness: 0.1, flatShading: true });
+
+            spawnThunderDragon();
+            createCosmicCloudTrail();
+
+            // Populate the track out in front initially
+            for(let z = -40; z > -250; z -= spawnIntervalZ) {
+                spawnObstacleRow(z);
+            }
+
+            window.addEventListener('keydown', handleInteractions);
+            window.addEventListener('resize', onViewportResize);
+
+            animate();
+        }
+
+        function createCloudSeaTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512; canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#140826'; ctx.fillRect(0, 0, 512, 512);
+            ctx.strokeStyle = 'rgba(167, 139, 250, 0.15)'; ctx.lineWidth = 4;
+            for(let i = 0; i < 20; i++) {
+                ctx.beginPath();
+                let cx = Math.random() * 512, cy = Math.random() * 512, radius = Math.random() * 40 + 20;
+                ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = THREE.RepeatWrapping; texture.wrapT = THREE.RepeatWrapping;
+            return texture;
+        }
+
+        function generateEndlessTrack(cloudTex) {
+            cloudTex.repeat.set(2, 40);
+            // Long linear plane representing the 3-lane runway floor
+            const runwayGeo = new THREE.PlaneGeometry(32, 2000);
+            const runwayMat = new THREE.MeshStandardMaterial({ map: cloudTex, roughness: 0.8 });
+            const runway = new THREE.Mesh(runwayGeo, runwayMat);
+            runway.rotation.x = -Math.PI / 2;
+            runway.position.set(0, 15, -800);
+            scene.add(runway);
+        }
+
+        function spawnThunderDragon() {
+            dragonHead = new THREE.Group();
+
+            const jawGeo = new THREE.BoxGeometry(1.8, 1.4, 2.8);
+            const whiteScaleMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25 });
+            const coreSkull = new THREE.Mesh(jawGeo, whiteScaleMat);
+            coreSkull.position.y = 0.7;
+            dragonHead.add(coreSkull);
+
+            const irisGeo = new THREE.SphereGeometry(0.25, 12, 12);
+            const furiousEyeMat = new THREE.MeshBasicMaterial({ color: 0xff0033 });
+            const leftEye = new THREE.Mesh(irisGeo, furiousEyeMat); leftEye.position.set(-0.9, 1.0, 0.8); dragonHead.add(leftEye);
+            const rightEye = leftEye.clone(); rightEye.position.x = 0.9; dragonHead.add(rightEye);
+
+            const hornGeo = new THREE.ConeGeometry(0.18, 2.5, 5);
+            imperialGoldMat = new THREE.MeshStandardMaterial({ color: 0xffbb00, metalness: 0.8, roughness: 0.2 });
+            const leftHorn = new THREE.Mesh(hornGeo, imperialGoldMat);
+            leftHorn.position.set(-0.5, 1.8, -0.5);
+            leftHorn.rotation.set(-Math.PI / 5, 0, -Math.PI / 10);
+            dragonHead.add(leftHorn);
+
+            const rightHorn = leftHorn.clone();
+            rightHorn.position.x = 0.5; rightHorn.rotation.z = Math.PI / 10;
+            dragonHead.add(rightHorn);
+
+            dragonHead.position.set(0, 16.5, 0); 
+            scene.add(dragonHead);
+
+            linkGeo = new THREE.SphereGeometry(1.0, 12, 12);
+            const linkMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.35 });
+
+            for (let i = 0; i < totalSegments; i++) {
+                appendTailMeshNode(i, linkMat);
+            }
+
+            // Prefill positional array history matching the layout
+            for (let i = 0; i < 1000; i++) {
+                trackingX.push(0);
+                trackingY.push(16.5);
+                trackingZ.push(0);
+            }
+        }
+
+        function appendTailMeshNode(index, mat) {
+            const linkMesh = new THREE.Mesh(linkGeo, mat || new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.35 }));
+            let scaleRatio = Math.max(0.3, 1.0 - (index * 0.07));
+            linkMesh.scale.set(scaleRatio, scaleRatio, scaleRatio);
+            
+            const spineRidgeGeo = new THREE.BoxGeometry(0.25, 0.5, 0.5);
+            const ridgeSpike = new THREE.Mesh(spineRidgeGeo, imperialGoldMat);
+            ridgeSpike.position.y = 0.9;
+            linkMesh.add(ridgeSpike);
+
+            scene.add(linkMesh);
+            segmentsArray.push(linkMesh);
+        }
+
+        // Procedural generator producing randomized Lane Layout blocks
+        function spawnObstacleRow(zLocation) {
+            // Pick a randomized combination style for the 3 lanes
+            // 0 = Left blocked, 1 = Middle blocked, 2 = Right blocked
+            // Ensure at least one lane remains open so the runner can survive!
+            let designChoice = Math.floor(Math.random() * 5);
+            let blockedLanes = [];
+
+            if (designChoice === 0) blockedLanes = [0];       // Left blocked
+            else if (designChoice === 1) blockedLanes = [1];  // Center blocked
+            else if (designChoice === 2) blockedLanes = [2];  // Right blocked
+            else if (designChoice === 3) blockedLanes = [0, 1]; // Left + Center blocked (Must go Right)
+            else if (designChoice === 4) blockedLanes = [1, 2]; // Center + Right blocked (Must go Left)
+
+            const chhortenMat = new THREE.MeshStandardMaterial({ color: 0x992222, roughness: 0.6, flatShading: true });
+            const blockGeo = new THREE.BoxGeometry(5.5, 7.5, 4.0);
+
+            for (let lane = 0; lane < 3; lane++) {
+                if (blockedLanes.includes(lane)) {
+                    // Create an Obstacle Object (Red Wall)
+                    const obsMesh = new THREE.Mesh(blockGeo, chhortenMat);
+                    obsMesh.position.set(laneXValues[lane], 18.75, zLocation);
+                    scene.add(obsMesh);
+                    obstacles.push(obsMesh);
+                } else {
+                    // Spawn a collectible item inside the empty paths 65% of the time
+                    if (Math.random() < 0.65) {
+                        const targetGroup = new THREE.Group();
+                        let isNorbu = Math.random() > 0.4;
+                        
+                        if (isNorbu) {
+                            const jewel = new THREE.Mesh(jewelGeo, jewelMat);
+                            targetGroup.add(jewel);
+                            targetGroup.userData = { type: 'norbu' };
+                        } else {
+                            const body = new THREE.Mesh(chiliBodyGeo, chiliMat);
+                            const tip = new THREE.Mesh(chiliTipGeo, chiliMat);
+                            tip.position.y = -1.0; tip.rotation.x = Math.PI;
+                            targetGroup.add(body); targetGroup.add(tip);
+                            targetGroup.rotation.z = -0.4;
+                            targetGroup.userData = { type: 'ema' };
+                        }
+
+                        targetGroup.position.set(laneXValues[lane], 17.2, zLocation + (Math.random() - 0.5) * 10);
+                        scene.add(targetGroup);
+                        collectibles.push(targetGroup);
+                    }
+                }
+            }
+        }
+
+        function triggerAlert(text, isBad) {
+            const toast = document.getElementById('alert-toast');
+            toast.innerText = text;
+            toast.style.color = isBad ? '#ff3b00' : '#ffcc00';
+            toast.style.opacity = 1;
+            toast.style.transform = 'translateY(0px)';
+            
+            setTimeout(() => {
+                toast.style.opacity = 0;
+                toast.style.transform = 'translateY(-10px)';
+            }, 700);
+        }
+
+        function createCosmicCloudTrail() {
+            const positionsBuffer = new Float32Array(sparksCount * 3);
+            const particlesGeo = new THREE.BufferGeometry();
+            particlesGeo.setAttribute('position', new THREE.BufferAttribute(positionsBuffer, 3));
+
+            const dotCanvas = document.createElement('canvas');
+            dotCanvas.width = 32; dotCanvas.height = 32;
+            const dotCtx = dotCanvas.getContext('2d');
+            const gradient = dotCtx.createRadialGradient(16, 16, 0, 16, 16, 16);
+            gradient.addColorStop(0, 'rgba(255, 215, 0, 0.6)'); gradient.addColorStop(1, 'rgba(0,0,0,0)');
+            dotCtx.fillStyle = gradient; dotCtx.fillRect(0, 0, 32, 32);
+            const dotTex = new THREE.CanvasTexture(dotCanvas);
+
+            const pointsMat = new THREE.PointsMaterial({
+                size: 2.2, map: dotTex, transparent: true,
+                blending: THREE.AdditiveBlending, depthWrite: false
+            });
+
+            particlesSystem = new THREE.Points(particlesGeo, pointsMat);
+            scene.add(particlesSystem);
+
+            for (let i = 0; i < sparksCount; i++) {
+                particlesData.push({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, remainingLife: 0 });
+            }
+        }
+
+        function refreshCosmicTrailParticles() {
+            const coords = particlesSystem.geometry.attributes.position.array;
+            const lastTailSegmentCoords = segmentsArray[totalSegments - 1].position;
+
+            for (let i = 0; i < sparksCount; i++) {
+                let spark = particlesData[i];
+                if (spark.remainingLife <= 0) {
+                    spark.x = lastTailSegmentCoords.x + (Math.random() - 0.5) * 1.5;
+                    spark.y = lastTailSegmentCoords.y + (Math.random() - 0.5) * 1.0;
+                    spark.z = lastTailSegmentCoords.z + 1;
+                    spark.vx = (Math.random() - 0.5) * 0.04;
+                    spark.vy = Math.random() * 0.03 + 0.01; 
+                    spark.vz = gameSpeed * 0.5;
+                    spark.remainingLife = Math.random() * 20 + 15; 
+                } else {
+                    spark.x += spark.vx; spark.y += spark.vy; spark.z += spark.vz;
+                    spark.remainingLife--;
+                }
+                let idx = i * 3;
+                coords[idx] = spark.x; coords[idx + 1] = spark.y; coords[idx + 2] = spark.z;
+            }
+            particlesSystem.geometry.attributes.position.needsUpdate = true;
+        }
+
+        function handleInteractions(e) {
+            switch (e.key.toLowerCase()) {
+                case 'a': // Move Lane Left
+                    if (currentLane > 0) {
+                        currentLane--;
+                        targetX = laneXValues[currentLane];
+                    }
+                    break;
+                case 'd': // Move Lane Right
+                    if (currentLane < 2) {
+                        currentLane++;
+                        targetX = laneXValues[currentLane];
+                    }
+                    break;
+            }
+        }
+
+        function onViewportResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 1. Constantly increase depth travel (Continuous Auto-Running)
+            dragonHead.position.z -= gameSpeed;
+
+            // Gradual incremental speed increase over time to heighten difficulty
+            gameSpeed += 0.0001;
+
+            // 2. Linear Interp Interpolation for snap lane shifting
+            dragonHead.position.x = THREE.MathUtils.lerp(dragonHead.position.x, targetX, 0.22);
+            
+            // Floating subtle ripple effect animation frame wave
+            dragonHead.position.y = 16.5 + Math.sin(Date.now() * 0.004) * 0.4;
+
+            // Visual body-tilt rotation feedback based on directional movement
+            let lateralDiff = targetX - dragonHead.position.x;
+            dragonHead.rotation.z = THREE.MathUtils.lerp(dragonHead.rotation.z, lateralDiff * 0.08, 0.1);
+            dragonHead.rotation.y = THREE.MathUtils.lerp(dragonHead.rotation.y, lateralDiff * 0.05, 0.1);
+
+            // 3. Procedural Endless Spawn Logic Loop
+            if (dragonHead.position.z < lastSpawnZ) {
+                spawnObstacleRow(dragonHead.position.z - 180);
+                lastSpawnZ -= spawnIntervalZ;
+            }
+
+            // 4. Hitbox Collision Testing Matrix loops (Obstacles & Collectibles)
+            const headBox = new THREE.Box3().setFromObject(dragonHead);
+
+            // Process Barriers
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                
+                // If it's way behind us, clean it up out of memory
+                if (obs.position.z > dragonHead.position.z + 30) {
+                    scene.remove(obs);
+                    obstacles.splice(i, 1);
+                    continue;
+                }
+
+                // Check collision intersection bounds
+                let obsBox = new THREE.Box3().setFromObject(obs);
+                if (headBox.intersectsBox(obsBox)) {
+                    // CRASH penalty logic sequence trigger
+                    cameraShake = 5;
+                    score = Math.max(0, score - 10);
+                    document.getElementById('score-display').innerText = score;
+
+                    if (totalSegments > initialSegments) {
+                        totalSegments--;
+                        let removedNode = segmentsArray.pop();
+                        scene.remove(removedNode);
+                        document.getElementById('length-display').innerText = totalSegments;
+                        triggerAlert("💥 WALL IMPACT! LENGTH DOCKED", true);
+                    } else {
+                        triggerAlert("💥 WALL IMPACT! MERIT DOCKED", true);
+                    }
+
+                    // Remove the barrier immediately so you don't get hit multiple times
+                    scene.remove(obs);
+                    obstacles.splice(i, 1);
+                }
+            }
+
+            // Process Collectible items
+            for (let i = collectibles.length - 1; i >= 0; i--) {
+                let item = collectibles[i];
+                item.rotation.y += 0.04;
+
+                if (item.position.z > dragonHead.position.z + 30) {
+                    scene.remove(item);
+                    collectibles.splice(i, 1);
+                    continue;
+                }
+
+                // Distance hitbox vector radius checks
+                let dist = dragonHead.position.distanceTo(item.position);
+                if (dist < 2.5) {
+                    let type = item.userData.type;
+                    score += (type === 'norbu') ? 15 : 10;
+                    totalSegments++;
+                    appendTailMeshNode(totalSegments - 1);
+
+                    document.getElementById('score-display').innerText = score;
+                    document.getElementById('length-display').innerText = totalSegments;
+                    triggerAlert((type === 'norbu') ? "✨ NORBU HARVESTED (+15)" : "🌶️ EMA SPICE HARVESTED (+10)", false);
+
+                    scene.remove(item);
+                    collectibles.splice(i, 1);
+                }
+            }
+
+            // 5. Shift Positional Data Tracking History array strings
+            trackingX.unshift(dragonHead.position.x);
+            trackingY.unshift(dragonHead.position.y);
+            trackingZ.unshift(dragonHead.position.z);
+            
+            trackingX.pop(); trackingY.pop(); trackingZ.pop();
+
+            // 6. Fluid Slithering Snake-Tail Pipeline updates
+            for (let i = 0; i < totalSegments; i++) {
+                let targetHistoryIndex = (i + 1) * segmentDelayInterval;
+                let segmentNode = segmentsArray[i];
+                
+                segmentNode.position.x = trackingX[targetHistoryIndex];
+                segmentNode.position.y = trackingY[targetHistoryIndex];
+                segmentNode.position.z = trackingZ[targetHistoryIndex];
+                
+                // Add an elegant procedural sine-wave wiggle down the back spine
+                let wiggle = Math.sin((Date.now() * 0.009) - (i * 0.6)) * 0.35;
+                segmentNode.position.x += wiggle;
+            }
+
+            // 7. Refresh particle engine trackers
+            refreshCosmicTrailParticles();
+
+            // 8. Rigid Elastic Runner Camera Track setup
+            let targetCamX = dragonHead.position.x * 0.7; // Smoothly damp tracking offset look slightly
+            let targetCamY = 23.5;
+            let targetCamZ = dragonHead.position.z + 16.0; // Stay behind
+
+            if (cameraShake > 0) {
+                targetCamX += (Math.random() - 0.5) * cameraShake;
+                targetCamY += (Math.random() - 0.5) * cameraShake;
+                cameraShake *= 0.85;
+                if (cameraShake < 0.05) cameraShake = 0;
+            }
+
+            camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetCamX, 0.1);
+            camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetCamY, 0.1);
+            camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetCamZ, 0.1);
+            
+            camera.lookAt(new THREE.Vector3(dragonHead.position.x, 17.5, dragonHead.position.z - 15));
+
+            // 9. Output telemetry readouts to display gauge panels
+            const speedometerReadoutGaugeValue = Math.abs(gameSpeed * 120).toFixed(1);
+            document.getElementById('speedometer').innerText = `${speedometerReadoutGaugeValue} C/H`;
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>
